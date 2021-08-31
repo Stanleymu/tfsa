@@ -1,0 +1,499 @@
+---
+title: "Tax Free Savings Portfolio"
+output: flexdashboard::flex_dashboard
+vertical_layout: scroll
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(BatchGetSymbols)
+library(PerformanceAnalytics)
+library(reshape2)
+library(tidyquant)
+library(tidyverse)
+library(fPortfolio)
+library(kableExtra)
+library(pander)
+library(reactablefmtr)
+library(viridis)
+library(RColorBrewer)
+library(quantmod)
+library(patchwork)
+library(googlesheets4)
+library(httr)
+library(hablar)
+library(ggpubr)
+library(readr)
+library(readxl)
+library(TTR)
+library(quarks)
+library(plotly)
+library(methods)
+
+options(scipen = 999, digits = 4)
+
+
+
+
+setwd("~/")
+
+options(scipen = 999, digits = 4)
+
+
+
+Ra <- c("STXWDM.JO","SYG4IR.JO","STXEMG.JO","SYGWD.JO","NFEVAL.JO","STX40.JO","STXFIN.JO","STXRES.JO") %>%
+tq_get(get  = "stock.prices",
+from = "2018-01-01")%>%
+group_by(symbol) %>%
+tq_transmute(select = adjusted,
+mutate_fun = periodReturn,
+period     = "weekly",type = "log",
+col_rename = "Ra")
+
+
+
+Ra
+wide_DF <- Ra %>% spread(symbol, Ra)
+Ra_W <- xts::xts(wide_DF[,-1], order.by = wide_DF$date)
+
+Ra_W <- Ra_W%>% zerofill()
+
+my_data <- as.timeSeries(Ra_W)
+lppData <- my_data
+
+assetsCorEigenPlot(lppData, method = "kendall")
+
+spiData <- lppData
+
+spiSpec <- portfolioSpec()
+
+setType(spiSpec) <- "CVaR"
+
+setAlpha(spiSpec) <- 0.05
+
+setSolver(spiSpec) <- "solveRquadprog"
+
+setRiskFreeRate(spiSpec) <- 0.095/12
+
+#box.1 <- "maxW[2:3] = 0.40"
+group.1 <- "minsumW[c(\"NFEVAL.JO\",\"STX40.JO\",\"STXFIN.JO\",\"STXRES.JO\")]=0.30"
+group.2 <- "minsumW[c(\"SYG4IR.JO\",\"STXEMG.JO\",\"STXWLD.JO\")]=0.60"
+
+
+groupConstraints <- c(group.1,group.2)
+
+spiConstraints <- groupConstraints 
+
+ratioPortfolio <- maxratioPortfolio(data = spiData, spec = spiSpec,
+                                    constraints = spiConstraints )
+
+
+spiBacktest <- portfolioBacktest()
+
+spiData <- lppData
+
+ setWindowsHorizon(spiBacktest) <- "12m"
+ 
+ setSmootherLambda(spiBacktest) <- "1m"
+ 
+  setSmootherInitialWeights(spiBacktest) <- rep(1/7, 7)
+
+
+spiFormula <- SYGWD.JO~STXWDM.JO+SYG4IR.JO+STXEMG.JO+NFEVAL.JO+STX40.JO+STXFIN.JO+STXRES.JO
+
+spiPortfolios <- portfolioBacktesting(formula = spiFormula, data = spiData, spec = spiSpec, constraints = spiConstraints, backtest = spiBacktest, trace = FALSE)
+
+Weights <- round(100 * spiPortfolios$weights, 2)[1:16, ]
+
+setSmootherLambda(spiBacktest) <- "1m"
+
+spiSmoothPortfolios <- portfolioSmoothing(object = spiPortfolios, backtest = spiBacktest, trace = FALSE)
+
+smoothWeights <- round(100 * spiSmoothPortfolios$smoothWeights, 2)[1:16, ]
+
+backtestPlot(spiSmoothPortfolios, cex = 0.8, font = 1, family = "mono")
+data <- as.data.frame(tail(spiSmoothPortfolios$weights,24))
+
+
+data <- rownames_to_column(data,var = "Date")
+
+
+#########################################################################################################################################
+my_portfolio <- googledrive::drive_get("range-write-demo") %>% 
+     read_sheet("alpha")
+	 
+w1  = my_portfolio$w1  # stxemg
+w2  = my_portfolio$w2  # syg4ir
+w3  = my_portfolio$w3  #stxwld
+w4  = my_portfolio$w4  #nfeval  
+w5  = my_portfolio$w5  #stx40
+w6  = my_portfolio$w6  #stxfin  
+w7  = my_portfolio$w7  #stxres 
+my_port <- my_portfolio%>%select(Date,NAV,STXWDM.JO,SYG4IR.JO,STXEMG.JO,SYGWD.JO,NFEVAL.JO,STX40.JO,STXFIN.JO,STXRES.JO)
+names(my_port)[2]<-"Portfolio"
+names(my_port)[6]<-"Benchmark"
+
+
+#names(my_port)[1]<- "Date"
+#(my_port)[2]<- "Portfolio"
+#names(my_port)[3]<- "STXEMG"
+#names(my_port)[4]<- "SYG4IR"
+#names(my_port)[5]<- "STXWDM"
+
+Ra <- xts::xts(my_port[,-1], order.by = my_port$Date)
+
+Ra <- Return.calculate(Ra)
+
+scale=(length(Ra$STXWDM.JO))
+
+url1<-"https://www.ssga.com/us/en/institutional/etfs/library-content/products/fund-data/etfs/us/holdings-daily-us-en-komp.xlsx"
+download.file(url1, destfile = "./holdings-daily-us-en-komp.xlsx",cacheOK=TRUE,mode="wb") 
+
+
+url2<-'https://www.ishares.com/uk/individual/en/products/264659/ishares-msci-emerging-markets-imi-ucits-etf/1506575576011.ajax?fileType=csv&fileName=EIMI_holdings&dataType=fund'
+download.file(url2, destfile = "./EIMI_holdings.csv",cacheOK=TRUE)
+
+
+url3<-'https://www.ishares.com/uk/individual/en/products/251882/ishares-msci-world-ucits-etf-acc-fund/1506575576011.ajax?fileType=csv&fileName=SWDA_holdings&dataType=fund'
+download.file(url3, destfile = "./SWDA_holdings.csv",cacheOK=TRUE)
+
+
+
+holdings_daily_us_en_komp <- read_excel("holdings-daily-us-en-komp.xlsx", 
+     skip = 4)
+holdings_daily_us_en_komp <- holdings_daily_us_en_komp[complete.cases(holdings_daily_us_en_komp), ]
+
+holdings_daily_us_en_komp <- holdings_daily_us_en_komp%>%convert(num(Weight))%>% 
+    mutate_if(is.numeric, round,digits=2)
+
+#######################################################################################################
+
+EIMI_holdings <- read_csv("EIMI_holdings.csv",  skip = 2)
+
+EIMI_holdings <- EIMI_holdings[complete.cases(EIMI_holdings), ]
+
+names(EIMI_holdings)[4] <- "Weight"
+
+EIMI_holdings <- EIMI_holdings%>%convert(num(Weight))%>% 
+    mutate_if(is.numeric, round,digits=2)
+
+ 
+###############################################################################################################
+
+
+SWDA_holdings <- read_csv("SWDA_holdings.csv",  skip = 2)
+
+SWDA_holdings <- SWDA_holdings[complete.cases(SWDA_holdings), ]
+
+names(SWDA_holdings)[4] <- "Weight"
+
+SWDA_holdings <- SWDA_holdings%>%convert(num(Weight))%>% 
+    mutate_if(is.numeric, round,digits=2)
+
+###############################################################################################################
+
+komp_lt <- holdings_daily_us_en_komp %>%
+     mutate(Allocation = holdings_daily_us_en_komp$Weight*tail(w2,1))%>%mutate(Location = "United States")%>% select(Ticker,Name,Sector,Allocation,Location)
+
+
+ EIMI_lt <- EIMI_holdings %>%
+     mutate(Allocation = EIMI_holdings$Weight*tail(w1,1))%>%select(`Issuer Ticker`,Name,Sector,Allocation,Location)
+
+names(EIMI_lt)[1]<-"Ticker"
+
+
+SWDA_lt <- SWDA_holdings %>%
+     mutate(Allocation = SWDA_holdings$Weight*tail(w3,1))%>%select(`Issuer Ticker`,Name,Sector,Allocation,Location)
+
+names(SWDA_lt)[1]<-"Ticker"
+
+##################################################################################################################################
+
+
+{
+  
+X_underlyings <- read_csv("~/Core Portfolio/SA_ETFs_files/_underlyings.csv")
+
+stxres <- read_excel("~/Core Portfolio/SA_ETFs_files/stxres.xlsx", 
+    skip = 1)
+
+stx40 <- read_excel("~/Core Portfolio/SA_ETFs_files/stx40.xlsx", 
+     skip = 1)
+
+stxfin <- read_excel("~/Core Portfolio/SA_ETFs_files/stxfin.xlsx", 
+    skip = 1)
+
+}
+
+
+{
+  
+  nfeval <- X_underlyings%>%select(Code,Name,ICBIndustryLongName,Weight)%>%mutate(Location="South Africa")
+  names(nfeval)[1] <- "Ticker"
+  names(nfeval)[3] <- "Sector"
+  names(nfeval)[4] <- "Allocation"
+  
+   nfeval_d <- nfeval%>%convert(num(Allocation))%>% 
+     mutate_if(is.numeric, round,digits=2)
+   nfeval_d <- nfeval_d %>% mutate(Allocation = nfeval_d$Allocation *tail(w4,1))
+  
+}
+
+{
+    stx40 <- stx40%>%select(CODE,`SHARE NAME`,INDUSTRY,WEIGHT)%>%mutate(Location="South Africa")
+  names(stx40)[1] <- "Ticker"
+  names(stx40)[2] <- "Name"
+  names(stx40)[3] <- "Sector"
+  names(stx40)[4] <- "Allocation"
+  
+   stx40_d <- stx40%>%convert(num(Allocation))%>% 
+     mutate_if(is.numeric, round,digits=2)
+   stx40_d <- stx40_d %>% mutate(Allocation = stx40_d$Allocation *tail(w5,1))
+   
+}
+
+
+{
+   stxfin <- stxfin%>%select(CODE,`SHARE NAME`,INDUSTRY,WEIGHT)%>%mutate(Location="South Africa")
+  names(stxfin)[1] <- "Ticker"
+  names(stxfin)[2] <- "Name"
+  names(stxfin)[3] <- "Sector"
+  names(stxfin)[4] <- "Allocation"
+  
+   stxfin_d <- stxfin%>%convert(num(Allocation))%>% 
+     mutate_if(is.numeric, round,digits=2)
+   stxfin_d <- stxfin_d %>% mutate(Allocation = stxfin_d$Allocation *tail(w6,1))
+  
+}
+
+{
+  
+   stxres <- stxres%>%select(CODE,`SHARE NAME`,INDUSTRY,WEIGHT)%>%mutate(Location="South Africa")
+  names(stxres)[1] <- "Ticker"
+  names(stxres)[2] <- "Name"
+  names(stxres)[3] <- "Sector"
+  names(stxres)[4] <- "Allocation"
+  
+  stxres_d <- stxres%>%convert(num(Allocation))%>% 
+     mutate_if(is.numeric, round,digits=2)
+   stxres_d <- stxres_d %>% mutate(Allocation = stxres_d$Allocation *tail(w7,1))
+}
+
+
+
+
+###############################################################################################################################
+#port_lt <- bind_rows(komp_lt,EIMI_lt)
+
+port_lt <- bind_rows(komp_lt,EIMI_lt,SWDA_lt,nfeval_d,stx40_d,stxfin_d,stxres_d)%>% arrange(desc(Allocation))
+
+port_lt_region <- aggregate(port_lt$Allocation, by=list(Location=port_lt$Location), FUN=sum)
+
+names(port_lt_region)[2] <- "Weight"
+
+port_lt_region <- port_lt_region%>%top_n(10)%>%arrange(desc(Weight))
+
+
+
+############################################################
+
+{my_ret <- round(Return.cumulative(Ra),digits=4)*100
+my_ulcer <- round(UlcerIndex(Ra),digits=4)*100
+ulcer_chart <- rbind.data.frame(my_ret,my_ulcer)
+ulcer_c <- as.data.frame(t(ulcer_chart))
+ulcer_chart<-tibble::rownames_to_column(ulcer_c, "Code")}
+
+```
+Page 1
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Weighting and Backtesting  
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+backtestPlot(spiSmoothPortfolios, cex = 0.8, font = 1, family = "mono")
+
+```
+
+Page 2
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Recommended Weights 
+
+```{r echo=FALSE, fig.height=8, fig.width=14, message=FALSE, warning=FALSE, paged.print=TRUE, results='asis'}
+data%>%reactable(.,minRows = 12,showPageSizeOptions = TRUE,searchable = TRUE,theme = slate(),
+  highlight = TRUE,defaultSorted = list(Date = "desc"),
+  defaultPageSize = 12,
+               defaultColDef = colDef(align = "center", # align column header
+                               cell = data_bars(.,number_fmt = scales::percent, fill_color = viridis::turbo(3), text_position = "inside-end")))
+
+```
+Page 3
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Actual Portfolio Performance since inception 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+chart.CumReturns(Ra[,c(1,5)],wealth.index = TRUE,legend.loc = "topright",main="Portfolio Cumulative Perfomance",plot.engine = "dygraph")
+
+```
+Page 4
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Maximum Drawdowns
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+
+chart.Drawdown(Ra[,c(1,5)],legend.loc = "bottomright",main="Maximum Drawdowns",plot.engine = "dygraph")
+
+```
+Page 5
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Rolling 10 Day Beta 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+chart.RollingQuantileRegression(Ra[,1],Ra[,5],width = 10,legend.loc="bottomleft",main = "Rolling 10 day Beta",plot.engine = "dygraph")
+
+```
+Page 6
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Rolling 10 Day Correlation
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+chart.RollingCorrelation (Ra[,1],Ra[,5],width = 10,legend.loc="bottomleft",main = "Rolling 10 day Correlation",plot.engine = "dygraph")
+
+```
+
+Page 7
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Annualized Portfolio Performance
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+ar <- table.AnnualizedReturns(Ra,scale = scale)
+ar%>%reactable(.,minRows = 12,showPageSizeOptions = TRUE,theme = slate(),
+  highlight = TRUE,
+  defaultPageSize = 12,
+               defaultColDef = colDef(align = "center", # align column header
+                               cell = data_bars(.,number_fmt = scales::percent, fill_color = viridis::turbo(3), text_position = "inside-end")))
+
+```
+Page 8
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Portfolio Top Drawdowns
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+dd <- table.Drawdowns(Ra)
+dd%>%reactable(.,columns = list (Depth = colDef(format = colFormat(percent = TRUE, digits = 2))),defaultColDef = colDef(align = "center",
+cell = data_bars(dd,fill_color = viridis::turbo(3), text_position = "inside-end")),minRows = 12,showPageSizeOptions = TRUE,theme = slate(),
+  highlight = TRUE,
+  defaultPageSize = 12)
+
+```
+Page 9
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Exposure by Region 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+fig.region <-  plot_ly(x = port_lt_region$Weight, y = port_lt_region$Location, type = 'bar', orientation = 'h',color = ~port_lt_region$Location) %>%
+    layout(
+        title = "Exposure by Region",
+        xaxis = list(title = "Exposure%"),
+        yaxis = list(title = "Location",
+                     categoryorder = "array",
+                     categoryarray = ~port_lt_region$Location ))
+fig.region
+
+```
+
+Page 10
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Top Portfolio Holdings
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+holdings <- port_lt%>% dplyr::mutate(Weight = Allocation / 100) %>% select(Ticker,Name,Sector,Weight,Location)%>%convert(num(Weight))
+holdings%>%reactable(.,showPageSizeOptions = TRUE,searchable = TRUE,theme = slate(),highlight = TRUE,columns = list (Weight = colDef(format = colFormat(percent = TRUE, digits = 2))))
+
+```
+
+Page 11
+================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Ulcer Index 
+
+```{r message=FALSE, warning=FALSE, echo=FALSE,fig.height=8, fig.width=14}
+fig <-  plot_ly(data = ulcer_chart, x = ~`Ulcer Index`, y = ~`Cumulative Return`, color = ~Code, type = 'scatter', mode = 'markers',marker = list(size = 10))%>%
+  layout(title = 'Ulcer Index vs Returns', plot_bgcolor = "#e5ecf6", xaxis = list(title = 'Ulcer Index'), 
+         yaxis = list(title = 'Cumulative Return (%)'), legend = list(title=list(text='<b> Code </b>')))
+fig
+
+```
+Page 12
+================================
+
+Column {data-width=850}
+-----------------------------------------------------------------------
+
+### Value at Risk 
+
+```{r echo=FALSE, fig.height=8, fig.width=14, message=FALSE, warning=FALSE,results='hide'}
+
+{ Ra[is.na(Ra)] <- 0
+
+returns <- Ra$Portfolio
+
+
+# volatility weighting via GARCH
+garch <- vwhs(x = returns, p = 0.99,lambda = 0.70, model = "GARCH", variance.model =
+list(model = "sGARCH"))
+
+par(mfrow=c(2,2))
+
+
+ plot(garch$garchmod,which=2)
+ plot(garch$garchmod,which=3)
+ plot(garch$garchmod,which=8)
+ plot(garch$garchmod,which=1) }
+
+
+
+
+```
